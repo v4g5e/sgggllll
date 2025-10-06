@@ -1,103 +1,65 @@
-﻿﻿CREATE DATABASE RealEstateDB;
-USE RealEstateDB;
+﻿CREATE DATABASE PharmacyDB;
+USE PharmacyDB;
 
-CREATE TABLE Properties (
-    PropertyID INT IDENTITY PRIMARY KEY,
-    Address NVARCHAR(200) NOT NULL,
-    PropertyType NVARCHAR(50) CHECK (PropertyType IN ('Apartment', 'House', 'Commercial', 'Land')),
-    Price DECIMAL(12,2),
-    Area DECIMAL(8,2),
-    Bedrooms INT,
-    Bathrooms INT,
-    Status NVARCHAR(20) DEFAULT 'Available' CHECK (Status IN ('Available', 'Sold', 'Rented', 'Under Contract'))
+CREATE TABLE Suppliers (
+    SupplierID INT IDENTITY PRIMARY KEY,
+    CompanyName NVARCHAR(100) NOT NULL,
+    ContactPerson NVARCHAR(100),
+    Phone NVARCHAR(20)
 );
 
-CREATE TABLE Agents (
-    AgentID INT IDENTITY PRIMARY KEY,
+CREATE TABLE Medications (
+    MedicationID INT IDENTITY PRIMARY KEY,
+    MedicationName NVARCHAR(100) NOT NULL,
+    SupplierID INT FOREIGN KEY REFERENCES Suppliers(SupplierID),
+    Category NVARCHAR(50),
+    Price DECIMAL(10,2),
+    StockQuantity INT,
+    RequiresPrescription BIT
+);
+
+CREATE TABLE Customers (
+    CustomerID INT IDENTITY PRIMARY KEY,
     FirstName NVARCHAR(50) NOT NULL,
     LastName NVARCHAR(50) NOT NULL,
     Phone NVARCHAR(20),
-    Email NVARCHAR(100),
-    CommissionRate DECIMAL(5,2),
-    HireDate DATE
+    Discount DECIMAL(5,2) DEFAULT 0
 );
 
-CREATE TABLE Clients (
-    ClientID INT IDENTITY PRIMARY KEY,
-    FirstName NVARCHAR(50) NOT NULL,
-    LastName NVARCHAR(50) NOT NULL,
-    Phone NVARCHAR(20),
-    Email NVARCHAR(100),
-    ClientType NVARCHAR(20) CHECK (ClientType IN ('Buyer', 'Seller', 'Tenant', 'Landlord'))
+CREATE TABLE Prescriptions (
+    PrescriptionID INT IDENTITY PRIMARY KEY,
+    CustomerID INT FOREIGN KEY REFERENCES Customers(CustomerID),
+    DoctorName NVARCHAR(100),
+    IssueDate DATE,
+    ExpiryDate DATE
 );
 
-CREATE TABLE Viewings (
-    ViewingID INT IDENTITY PRIMARY KEY,
-    PropertyID INT FOREIGN KEY REFERENCES Properties(PropertyID),
-    ClientID INT FOREIGN KEY REFERENCES Clients(ClientID),
-    AgentID INT FOREIGN KEY REFERENCES Agents(AgentID),
-    ViewingDate DATETIME,
-    ClientFeedback NVARCHAR(500)
+CREATE TABLE Sales (
+    SaleID INT IDENTITY PRIMARY KEY,
+    CustomerID INT FOREIGN KEY REFERENCES Customers(CustomerID),
+    MedicationID INT FOREIGN KEY REFERENCES Medications(MedicationID),
+    Quantity INT,
+    SaleDate DATETIME,
+    TotalAmount DECIMAL(10,2),
+    PrescriptionID INT FOREIGN KEY REFERENCES Prescriptions(PrescriptionID)
 );
 
-CREATE TABLE Deals (
-    DealID INT IDENTITY PRIMARY KEY,
-    PropertyID INT FOREIGN KEY REFERENCES Properties(PropertyID),
-    BuyerClientID INT FOREIGN KEY REFERENCES Clients(ClientID),
-    SellerClientID INT FOREIGN KEY REFERENCES Clients(ClientID),
-    AgentID INT FOREIGN KEY REFERENCES Agents(AgentID),
-    DealDate DATE,
-    FinalPrice DECIMAL(12,2),
-    Commission DECIMAL(10,2),
-    Status NVARCHAR(20) DEFAULT 'Completed'
-);
-
--- 1. Агенты с объемом продаж выше среднего
-SELECT a.FirstName, a.LastName, SUM(d.FinalPrice) as TotalSales
-FROM Agents a
-JOIN Deals d ON a.AgentID = d.AgentID
-WHERE d.Status = 'Completed'
-GROUP BY a.AgentID, a.FirstName, a.LastName
-HAVING SUM(d.FinalPrice) > (
-    SELECT AVG(TotalSales) FROM (
-        SELECT SUM(FinalPrice) as TotalSales 
-        FROM Deals 
-        WHERE Status = 'Completed'
-        GROUP BY AgentID
+-- 1. Лекарства с продажами выше среднего
+SELECT MedicationName, SUM(s.Quantity) as TotalSold
+FROM Medications m
+JOIN Sales s ON m.MedicationID = s.MedicationID
+GROUP BY m.MedicationID, m.MedicationName
+HAVING SUM(s.Quantity) > (
+    SELECT AVG(CAST(TotalSold AS FLOAT)) FROM (
+        SELECT SUM(Quantity) as TotalSold 
+        FROM Sales 
+        GROUP BY MedicationID
     ) as temp
 );
 
--- 2. Объекты без просмотров в течение месяца
-SELECT Address, Price, Status
-FROM Properties p
-WHERE Status = 'Available' AND NOT EXISTS (
-    SELECT 1 FROM Viewings v 
-    WHERE v.PropertyID = p.PropertyID 
-    AND v.ViewingDate > DATEADD(MONTH, -1, GETDATE())
-);
-
--- КУРСОР ДЛЯ РАСЧЕТА КОМИССИЙ АГЕНТОВ
-DECLARE @AgentID INT, @FirstName NVARCHAR(50), @LastName NVARCHAR(50), @Commission DECIMAL(12,2);
-DECLARE agent_cursor CURSOR FOR
-SELECT a.AgentID, a.FirstName, a.LastName, SUM(d.Commission)
-FROM Agents a
-JOIN Deals d ON a.AgentID = d.AgentID
-WHERE d.Status = 'Completed' AND YEAR(d.DealDate) = YEAR(GETDATE())
-GROUP BY a.AgentID, a.FirstName, a.LastName
-ORDER BY SUM(d.Commission) DESC;
-
-OPEN agent_cursor;
-FETCH NEXT FROM agent_cursor INTO @AgentID, @FirstName, @LastName, @Commission;
-
-PRINT 'КОМИССИИ АГЕНТОВ ЗА ТЕКУЩИЙ ГОД';
-PRINT '===============================';
-
-WHILE @@FETCH_STATUS = 0
-BEGIN
-    PRINT @LastName + ' ' + @FirstName + ': ' + FORMAT(@Commission, 'C', 'ru-RU');
-    FETCH NEXT FROM agent_cursor INTO @AgentID, @FirstName, @LastName, @Commission;
-END;
-
-CLOSE agent_cursor;
-DEALLOCATE agent_cursor;
+-- 2. Поставщики, у которых заканчиваются лекарства
+SELECT CompanyName, MedicationName, StockQuantity
+FROM Suppliers s
+JOIN Medications m ON s.SupplierID = m.SupplierID
+WHERE m.StockQuantity < 10;
 GO

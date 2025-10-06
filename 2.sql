@@ -1,93 +1,74 @@
-﻿CREATE DATABASE CinemaDB;
-USE CinemaDB;
+﻿CREATE DATABASE LibraryDB;
+USE LibraryDB;
 
-CREATE TABLE Movies (
-    MovieID INT IDENTITY PRIMARY KEY,
-    Title NVARCHAR(100) NOT NULL,
-    Genre NVARCHAR(50),
-    Duration INT, -- в минутах
-    Rating DECIMAL(3,1),
-    Director NVARCHAR(100),
-    ReleaseYear INT
+CREATE TABLE Authors (
+    AuthorID INT IDENTITY PRIMARY KEY,
+    FirstName NVARCHAR(50),
+    LastName NVARCHAR(50),
+    BirthYear INT
 );
 
-CREATE TABLE Halls (
-    HallID INT IDENTITY PRIMARY KEY,
-    HallName NVARCHAR(50) NOT NULL,
-    Capacity INT,
-    ScreenType NVARCHAR(20) CHECK (ScreenType IN ('2D', '3D', 'IMAX', 'VIP'))
+CREATE TABLE Categories (
+    CategoryID INT IDENTITY PRIMARY KEY,
+    CategoryName NVARCHAR(50) NOT NULL
 );
 
-CREATE TABLE Screenings (
-    ScreeningID INT IDENTITY PRIMARY KEY,
-    MovieID INT FOREIGN KEY REFERENCES Movies(MovieID),
-    HallID INT FOREIGN KEY REFERENCES Halls(HallID),
-    ScreeningTime DATETIME NOT NULL,
-    TicketPrice DECIMAL(8,2),
-    AvailableSeats INT
+CREATE TABLE Books (
+    BookID INT IDENTITY PRIMARY KEY,
+    Title NVARCHAR(200) NOT NULL,
+    AuthorID INT FOREIGN KEY REFERENCES Authors(AuthorID),
+    CategoryID INT FOREIGN KEY REFERENCES Categories(CategoryID),
+    ISBN NVARCHAR(20),
+    PublicationYear INT,
+    TotalCopies INT,
+    AvailableCopies INT
 );
 
-CREATE TABLE Customers (
-    CustomerID INT IDENTITY PRIMARY KEY,
+CREATE TABLE Readers (
+    ReaderID INT IDENTITY PRIMARY KEY,
     FirstName NVARCHAR(50) NOT NULL,
     LastName NVARCHAR(50) NOT NULL,
     Phone NVARCHAR(20),
-    Email NVARCHAR(100),
-    BirthDate DATE
+    RegistrationDate DATE
 );
 
-CREATE TABLE Tickets (
-    TicketID INT IDENTITY PRIMARY KEY,
-    ScreeningID INT FOREIGN KEY REFERENCES Screenings(ScreeningID),
-    CustomerID INT FOREIGN KEY REFERENCES Customers(CustomerID),
-    SeatNumber NVARCHAR(10) NOT NULL,
-    PurchaseDate DATETIME DEFAULT GETDATE(),
-    Price DECIMAL(8,2),
-    Discount DECIMAL(5,2) DEFAULT 0
+CREATE TABLE BookLoans (
+    LoanID INT IDENTITY PRIMARY KEY,
+    BookID INT FOREIGN KEY REFERENCES Books(BookID),
+    ReaderID INT FOREIGN KEY REFERENCES Readers(ReaderID),
+    LoanDate DATE NOT NULL,
+    ReturnDate DATE,
+    DueDate DATE NOT NULL
 );
 
--- 1. Фильмы с заполняемостью выше средней
-SELECT m.Title, s.ScreeningTime, 
-       (h.Capacity - s.AvailableSeats) as SoldSeats,
-       CAST((h.Capacity - s.AvailableSeats) AS FLOAT) / h.Capacity * 100 as OccupancyRate
-FROM Movies m
-JOIN Screenings s ON m.MovieID = s.MovieID
-JOIN Halls h ON s.HallID = h.HallID
-WHERE CAST((h.Capacity - s.AvailableSeats) AS FLOAT) / h.Capacity > (
-    SELECT AVG(CAST((h2.Capacity - s2.AvailableSeats) AS FLOAT) / h2.Capacity)
-    FROM Screenings s2
-    JOIN Halls h2 ON s2.HallID = h2.HallID
-    WHERE s2.AvailableSeats < h2.Capacity
+-- 1. Книги, которые никогда не брались (NOT EXISTS)
+SELECT Title FROM Books b
+WHERE NOT EXISTS (
+    SELECT 1 FROM BookLoans bl WHERE bl.BookID = b.BookID
 );
 
--- 2. Постоянные клиенты (более 3 посещений)
-SELECT FirstName, LastName, COUNT(TicketID) as VisitsCount
-FROM Customers c
-JOIN Tickets t ON c.CustomerID = t.CustomerID
-GROUP BY c.CustomerID, c.FirstName, c.LastName
-HAVING COUNT(TicketID) > 3;
+-- 2. Читатели с просроченными книгами
+SELECT FirstName, LastName, Title, DueDate
+FROM Readers r
+JOIN BookLoans bl ON r.ReaderID = bl.ReaderID
+JOIN Books b ON bl.BookID = b.BookID
+WHERE bl.ReturnDate IS NULL AND bl.DueDate < GETDATE();
 
--- КУРСОР ДЛЯ ОБНОВЛЕНИЯ СВОБОДНЫХ МЕСТ
-DECLARE @ScreeningID INT, @SoldSeats INT, @Capacity INT;
-DECLARE screening_cursor CURSOR FOR
-SELECT s.ScreeningID, COUNT(t.TicketID), h.Capacity
-FROM Screenings s
-JOIN Halls h ON s.HallID = h.HallID
-LEFT JOIN Tickets t ON s.ScreeningID = t.ScreeningID
-GROUP BY s.ScreeningID, h.Capacity;
+-- КУРСОР ДЛЯ ОБНОВЛЕНИЯ СТАТУСА КНИГ
+DECLARE @BookID INT, @AvailableCopies INT;
+DECLARE book_cursor CURSOR FOR
+SELECT b.BookID, b.TotalCopies - COUNT(bl.LoanID)
+FROM Books b
+LEFT JOIN BookLoans bl ON b.BookID = bl.BookID AND bl.ReturnDate IS NULL
+GROUP BY b.BookID, b.TotalCopies;
 
-OPEN screening_cursor;
-FETCH NEXT FROM screening_cursor INTO @ScreeningID, @SoldSeats, @Capacity;
-
+OPEN book_cursor;
+FETCH NEXT FROM book_cursor INTO @BookID, @AvailableCopies;
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    UPDATE Screenings 
-    SET AvailableSeats = @Capacity - @SoldSeats 
-    WHERE ScreeningID = @ScreeningID;
-    
-    FETCH NEXT FROM screening_cursor INTO @ScreeningID, @SoldSeats, @Capacity;
-END;
-
-CLOSE screening_cursor;
-DEALLOCATE screening_cursor;
+    UPDATE Books SET AvailableCopies = @AvailableCopies WHERE BookID = @BookID;
+    FETCH NEXT FROM book_cursor INTO @BookID, @AvailableCopies;
+END
+CLOSE book_cursor;
+DEALLOCATE book_cursor;
 GO

@@ -1,99 +1,63 @@
-﻿﻿﻿CREATE DATABASE DeliveryServiceDB;
-USE DeliveryServiceDB;
+﻿CREATE DATABASE OnlineShopDB;
+USE OnlineShopDB;
 
-CREATE TABLE Warehouses (
-    WarehouseID INT IDENTITY PRIMARY KEY,
-    WarehouseName NVARCHAR(100) NOT NULL,
-    Address NVARCHAR(200) NOT NULL,
-    Phone NVARCHAR(20),
-    Capacity INT
+CREATE TABLE Categories (
+    CategoryID INT IDENTITY PRIMARY KEY,
+    CategoryName NVARCHAR(100) NOT NULL,
+    ParentCategoryID INT FOREIGN KEY REFERENCES Categories(CategoryID)
 );
 
-CREATE TABLE Couriers (
-    CourierID INT IDENTITY PRIMARY KEY,
-    FirstName NVARCHAR(50) NOT NULL,
-    LastName NVARCHAR(50) NOT NULL,
-    Phone NVARCHAR(20) NOT NULL,
-    VehicleType NVARCHAR(50),
-    Status NVARCHAR(20) DEFAULT 'Available'
+CREATE TABLE Products (
+    ProductID INT IDENTITY PRIMARY KEY,
+    ProductName NVARCHAR(100) NOT NULL,
+    CategoryID INT FOREIGN KEY REFERENCES Categories(CategoryID),
+    Price DECIMAL(10,2) NOT NULL,
+    StockQuantity INT DEFAULT 0,
+    Description NVARCHAR(500)
 );
 
 CREATE TABLE Customers (
     CustomerID INT IDENTITY PRIMARY KEY,
     FirstName NVARCHAR(50) NOT NULL,
     LastName NVARCHAR(50) NOT NULL,
+    Email NVARCHAR(100) UNIQUE NOT NULL,
     Phone NVARCHAR(20),
-    Address NVARCHAR(200) NOT NULL,
-    Email NVARCHAR(100)
+    RegistrationDate DATETIME DEFAULT GETDATE()
 );
 
 CREATE TABLE Orders (
     OrderID INT IDENTITY PRIMARY KEY,
     CustomerID INT FOREIGN KEY REFERENCES Customers(CustomerID),
-    CourierID INT FOREIGN KEY REFERENCES Couriers(CourierID),
-    WarehouseID INT FOREIGN KEY REFERENCES Warehouses(WarehouseID),
     OrderDate DATETIME DEFAULT GETDATE(),
-    DeliveryAddress NVARCHAR(200) NOT NULL,
-    TotalWeight DECIMAL(8,2),
-    DeliveryFee DECIMAL(8,2),
+    TotalAmount DECIMAL(10,2),
     Status NVARCHAR(20) DEFAULT 'Pending',
-    EstimatedDelivery DATETIME,
-    ActualDelivery DATETIME
+    ShippingAddress NVARCHAR(200)
 );
 
-CREATE TABLE Routes (
-    RouteID INT IDENTITY PRIMARY KEY,
-    CourierID INT FOREIGN KEY REFERENCES Couriers(CourierID),
-    RouteDate DATE DEFAULT GETDATE(),
-    StartTime TIME,
-    EndTime TIME,
-    TotalDistance DECIMAL(8,2),
-    OrdersCompleted INT
+CREATE TABLE OrderDetails (
+    OrderDetailID INT IDENTITY PRIMARY KEY,
+    OrderID INT FOREIGN KEY REFERENCES Orders(OrderID),
+    ProductID INT FOREIGN KEY REFERENCES Products(ProductID),
+    Quantity INT NOT NULL,
+    UnitPrice DECIMAL(10,2) NOT NULL
 );
 
--- 1. Курьеры с количеством доставок выше среднего
-SELECT c.FirstName, c.LastName, COUNT(o.OrderID) as DeliveriesCount
-FROM Couriers c
-JOIN Orders o ON c.CourierID = o.CourierID
-WHERE o.Status = 'Delivered'
-GROUP BY c.CourierID, c.FirstName, c.LastName
-HAVING COUNT(o.OrderID) > (
-    SELECT AVG(CAST(DeliveriesCount AS FLOAT)) FROM (
-        SELECT COUNT(OrderID) as DeliveriesCount 
+-- 1. Покупатели с суммой заказов выше среднего
+SELECT c.FirstName, c.LastName, SUM(o.TotalAmount) as TotalSpent
+FROM Customers c
+JOIN Orders o ON c.CustomerID = o.CustomerID
+GROUP BY c.CustomerID, c.FirstName, c.LastName
+HAVING SUM(o.TotalAmount) > (
+    SELECT AVG(TotalSpent) FROM (
+        SELECT SUM(TotalAmount) as TotalSpent 
         FROM Orders 
-        WHERE Status = 'Delivered'
-        GROUP BY CourierID
+        GROUP BY CustomerID
     ) as temp
 );
 
--- 2. Заказы с просроченной доставкой
-SELECT o.OrderID, c.FirstName, c.LastName, o.EstimatedDelivery
-FROM Orders o
-JOIN Customers c ON o.CustomerID = c.CustomerID
-WHERE o.Status = 'In Transit' AND o.EstimatedDelivery < GETDATE();
-
--- КУРСОР ДЛЯ ОПТИМИЗАЦИИ МАРШРУТОВ
-DECLARE @CourierID INT, @FirstName NVARCHAR(50), @LastName NVARCHAR(50), @PendingOrders INT;
-DECLARE courier_cursor CURSOR FOR
-SELECT c.CourierID, c.FirstName, c.LastName, COUNT(o.OrderID)
-FROM Couriers c
-LEFT JOIN Orders o ON c.CourierID = o.CourierID AND o.Status = 'Pending'
-WHERE c.Status = 'Available'
-GROUP BY c.CourierID, c.FirstName, c.LastName
-ORDER BY COUNT(o.OrderID) DESC;
-
-OPEN courier_cursor;
-FETCH NEXT FROM courier_cursor INTO @CourierID, @FirstName, @LastName, @PendingOrders;
-
-PRINT 'РАСПРЕДЕЛЕНИЕ ЗАКАЗОВ ПО КУРЬЕРАМ';
-PRINT '================================';
-
-WHILE @@FETCH_STATUS = 0
-BEGIN
-    PRINT @LastName + ' ' + @FirstName + ': ' + CAST(@PendingOrders AS NVARCHAR(3)) + ' ожидающих заказов';
-    FETCH NEXT FROM courier_cursor INTO @CourierID, @FirstName, @LastName, @PendingOrders;
-END;
-
-CLOSE courier_cursor;
-DEALLOCATE courier_cursor;
+-- 2. Товары, которые никогда не заказывались
+SELECT ProductName FROM Products p
+WHERE NOT EXISTS (
+    SELECT 1 FROM OrderDetails od WHERE od.ProductID = p.ProductID
+);
 GO

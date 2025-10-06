@@ -1,93 +1,93 @@
-﻿CREATE DATABASE BowlingClubDB;
-USE BowlingClubDB;
+﻿CREATE DATABASE SchoolDB;
+USE SchoolDB;
 
-CREATE TABLE Players (
-    PlayerID INT IDENTITY PRIMARY KEY,
+CREATE TABLE Classes (
+    ClassID INT IDENTITY PRIMARY KEY,
+    ClassName NVARCHAR(20) NOT NULL,
+    ClassTeacherID INT,
+    RoomNumber NVARCHAR(10)
+);
+
+CREATE TABLE Subjects (
+    SubjectID INT IDENTITY PRIMARY KEY,
+    SubjectName NVARCHAR(50) NOT NULL,
+    HoursPerWeek INT
+);
+
+CREATE TABLE Teachers (
+    TeacherID INT IDENTITY PRIMARY KEY,
     FirstName NVARCHAR(50) NOT NULL,
     LastName NVARCHAR(50) NOT NULL,
     Phone NVARCHAR(20),
-    Email NVARCHAR(100),
-    RegistrationDate DATE DEFAULT GETDATE(),
-    SkillLevel NVARCHAR(20) CHECK (SkillLevel IN ('Beginner', 'Intermediate', 'Advanced', 'Professional'))
+    HireDate DATE,
+    SubjectID INT
 );
 
-CREATE TABLE Lanes (
-    LaneID INT IDENTITY PRIMARY KEY,
-    LaneNumber INT NOT NULL,
-    Status NVARCHAR(20) DEFAULT 'Available',
-    Condition NVARCHAR(20) CHECK (Condition IN ('Excellent', 'Good', 'Maintenance', 'Repair'))
+CREATE TABLE Students (
+    StudentID INT IDENTITY PRIMARY KEY,
+    FirstName NVARCHAR(50) NOT NULL,
+    LastName NVARCHAR(50) NOT NULL,
+    BirthDate DATE,
+    ClassID INT FOREIGN KEY REFERENCES Classes(ClassID),
+    Address NVARCHAR(200)
 );
 
-CREATE TABLE Tournaments (
-    TournamentID INT IDENTITY PRIMARY KEY,
-    TournamentName NVARCHAR(100) NOT NULL,
-    StartDate DATE,
-    EndDate DATE,
-    EntryFee DECIMAL(8,2),
-    PrizePool DECIMAL(10,2)
+CREATE TABLE Schedule (
+    ScheduleID INT IDENTITY PRIMARY KEY,
+    ClassID INT FOREIGN KEY REFERENCES Classes(ClassID),
+    SubjectID INT FOREIGN KEY REFERENCES Subjects(SubjectID),
+    TeacherID INT FOREIGN KEY REFERENCES Teachers(TeacherID),
+    DayOfWeek INT CHECK (DayOfWeek BETWEEN 1 AND 7),
+    LessonNumber INT,
+    Room NVARCHAR(10)
 );
 
-CREATE TABLE Games (
-    GameID INT IDENTITY PRIMARY KEY,
-    PlayerID INT FOREIGN KEY REFERENCES Players(PlayerID),
-    LaneID INT FOREIGN KEY REFERENCES Lanes(LaneID),
-    TournamentID INT FOREIGN KEY REFERENCES Tournaments(TournamentID),
-    GameDate DATETIME DEFAULT GETDATE(),
-    Score INT,
-    Duration INT
+CREATE TABLE Grades (
+    GradeID INT IDENTITY PRIMARY KEY,
+    StudentID INT FOREIGN KEY REFERENCES Students(StudentID),
+    SubjectID INT FOREIGN KEY REFERENCES Subjects(SubjectID),
+    Grade INT CHECK (Grade BETWEEN 1 AND 12),
+    GradeDate DATE,
+    Semester INT
 );
 
-CREATE TABLE Equipment (
-    EquipmentID INT IDENTITY PRIMARY KEY,
-    EquipmentType NVARCHAR(50) NOT NULL,
-    Size NVARCHAR(10),
-    Condition NVARCHAR(20),
-    LastMaintenance DATE
+-- Заполнение тестовыми данными
+INSERT INTO Classes VALUES ('10-А', 1, '201'), ('10-Б', 2, '202'), ('11-А', 3, '301');
+INSERT INTO Subjects VALUES ('Математика', 5), ('Физика', 4), ('Химия', 3), ('Литература', 4);
+INSERT INTO Teachers VALUES ('Иван', 'Петров', '+79001112233', '2010-09-01', 1);
+INSERT INTO Students VALUES ('Анна', 'Сидорова', '2006-05-15', 1, 'ул. Ленина 10');
+
+-- 1. Скалярный подзапрос: ученики с оценкой выше среднего по математике
+SELECT FirstName, LastName, Grade
+FROM Students s
+JOIN Grades g ON s.StudentID = g.StudentID
+WHERE g.SubjectID = 1 AND g.Grade > (
+    SELECT AVG(Grade) FROM Grades WHERE SubjectID = 1
 );
 
--- 1. Игроки с результатом выше среднего
-SELECT FirstName, LastName, Score
-FROM Players p
-JOIN Games g ON p.PlayerID = g.PlayerID
-WHERE g.Score > (
-    SELECT AVG(Score) FROM Games WHERE Score > 0
+-- 2. EXISTS: учителя, которые ведут занятия в 10-А классе
+SELECT FirstName, LastName FROM Teachers t
+WHERE EXISTS (
+    SELECT 1 FROM Schedule s 
+    WHERE s.TeacherID = t.TeacherID AND s.ClassID = 1
 );
 
--- 2. Дорожки с наибольшим количеством игр
-SELECT LaneNumber, COUNT(GameID) as GamesCount
-FROM Lanes l
-JOIN Games g ON l.LaneID = g.LaneID
-GROUP BY l.LaneID, l.LaneNumber
-HAVING COUNT(GameID) > (
-    SELECT AVG(CAST(GamesCount AS FLOAT)) FROM (
-        SELECT COUNT(GameID) as GamesCount 
-        FROM Games 
-        GROUP BY LaneID
-    ) as temp
-);
+-- Курсор для расчета среднего балла по классам
+DECLARE @ClassID INT, @ClassName NVARCHAR(20), @AvgGrade FLOAT;
+DECLARE class_cursor CURSOR FOR
+SELECT c.ClassID, c.ClassName, AVG(CAST(g.Grade AS FLOAT))
+FROM Classes c
+JOIN Students s ON c.ClassID = s.ClassID
+JOIN Grades g ON s.StudentID = g.StudentID
+GROUP BY c.ClassID, c.ClassName;
 
--- КУРСОР ДЛЯ РАСЧЕТА РЕЙТИНГА ИГРОКОВ
-DECLARE @PlayerID INT, @FirstName NVARCHAR(50), @LastName NVARCHAR(50), @AvgScore FLOAT;
-DECLARE player_cursor CURSOR FOR
-SELECT p.PlayerID, p.FirstName, p.LastName, AVG(CAST(g.Score AS FLOAT))
-FROM Players p
-JOIN Games g ON p.PlayerID = g.PlayerID
-WHERE g.Score > 0
-GROUP BY p.PlayerID, p.FirstName, p.LastName
-ORDER BY AVG(CAST(g.Score AS FLOAT)) DESC;
-
-OPEN player_cursor;
-FETCH NEXT FROM player_cursor INTO @PlayerID, @FirstName, @LastName, @AvgScore;
-
-PRINT 'РЕЙТИНГ ИГРОКОВ БОУЛИНГ-КЛУБА';
-PRINT '==============================';
-
+OPEN class_cursor;
+FETCH NEXT FROM class_cursor INTO @ClassID, @ClassName, @AvgGrade;
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    PRINT @LastName + ' ' + @FirstName + ': ' + CAST(ROUND(@AvgScore, 1) AS NVARCHAR(10)) + ' очков';
-    FETCH NEXT FROM player_cursor INTO @PlayerID, @FirstName, @LastName, @AvgScore;
-END;
-
-CLOSE player_cursor;
-DEALLOCATE player_cursor;
+    PRINT 'Класс: ' + @ClassName + ', Средний балл: ' + CAST(@AvgGrade AS NVARCHAR(10));
+    FETCH NEXT FROM class_cursor INTO @ClassID, @ClassName, @AvgGrade;
+END
+CLOSE class_cursor;
+DEALLOCATE class_cursor;
 GO
